@@ -153,6 +153,7 @@ class SwitchROM:
             parser = BeautifulSoup(response.content, "html.parser")
             
             game_title = parser.find("strong", string="Title: ").next_sibling.strip()
+
             self.set_console_title(game_title)
 
             rom_elements = []
@@ -173,6 +174,8 @@ class SwitchROM:
                 selected_region_index = int(input())
                 if 1 <= selected_region_index <= len(multiple_regions):
                     selected_region = multiple_regions[selected_region_index - 1]
+                    game_id = re.search(r'\[([0-9A-Za-z]{12,})\]', selected_region.find("strong").get_text())
+
                     next_tag = selected_region.find_next_sibling()
 
                     while next_tag and next_tag.name != "p":
@@ -185,6 +188,8 @@ class SwitchROM:
                     print("[!] Invalid region index selected.")
                     exit()
             else:
+                game_id = parser.find("strong", string="Title ID: ").next_sibling.strip()
+                
                 for element in parser.find_all("p"):
                     _class = element.get("class", [])
                     if "has-background" and "has-very-light-gray-color" and "has-vivid-red-background-color" in _class:
@@ -239,7 +244,7 @@ class SwitchROM:
                     single_fichier_element = selected_option.find("a", string="1Fichier")
                     download_links.append(single_fichier_element["href"])
         
-            return game_title, download_links
+            return game_title, game_id, download_links
         except Exception as e:
             print(f"[!] Error occurred: {e}")
     
@@ -316,11 +321,9 @@ class SwitchROM:
 
         return bypassed_links
  
-    def ryujinx_apply_updates(self, update_files):
+    def ryujinx_apply_updates(self, update_files, game_id):
         updates_json = {"selected": "","paths": []}
 
-        game_id = re.search(r'\[([^]]{11,})\]', update_files[0]).group(1)
-        
         games_folder = os.path.join(os.getenv('APPDATA'), 'Ryujinx', 'games', game_id.lower())
 
         os.makedirs(games_folder, exist_ok=True)
@@ -370,7 +373,7 @@ class SwitchROM:
         return update_files
 
     
-    def download_files(self, url_list, game_title):
+    def download_files(self, url_list, game_title, game_id):
         options = OptionsLoader.load_options()
         fichier = FichierBypass(options)
 
@@ -385,7 +388,7 @@ class SwitchROM:
 
             extracted_files = self.extract_all_files([options["games_folder"], options["updates_folder"], options["dlc_folder"]])
             if options["ryujinx_apply_updates"] and extracted_files:
-                self.ryujinx_apply_updates(extracted_files)
+                self.ryujinx_apply_updates(extracted_files, game_id)
   
 def main():
     rom_parser = SwitchROM()
@@ -394,10 +397,10 @@ def main():
     search_query = input("Game Name: ")
     game_link = rom_parser.search_game(search_query)
 
-    game_title, ad_links = rom_parser.get_game_rom(game_link)
+    game_title, game_id, ad_links = rom_parser.get_game_rom(game_link)
     fichier_links = rom_parser.bypass_ads(ad_links)
     
-    rom_parser.download_files(fichier_links, game_title)
+    rom_parser.download_files(fichier_links, game_title, game_id)
 
     rom_parser.session.close()
 
