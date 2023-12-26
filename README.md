@@ -27,4 +27,4 @@ Ensure that you have the legal right to download and use the ROMs.
 
 [xcscxr](https://github.com/xcscxr) for his ouo.io bypass!
 
-# [Video Demo](https://www.youtube.com/watch?v=sd_It63L0DE)
+# [Video Demo(little outdated)](https://www.youtube.com/watch?v=sd_It63L0DE)
