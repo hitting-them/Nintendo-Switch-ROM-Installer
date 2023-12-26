@@ -16,13 +16,127 @@ class OptionsLoader:
         with open(file_path, "r") as json_file:
             return json.load(json_file)
 
-class FichierBypass:
+class FileDownloader:
+    CHUNK_SIZE = 8192
+
     def __init__(self, options):
         self.session = HTMLSession()
         self.games_folder = options["games_folder"]
         self.updates_folder = options["updates_folder"]
         self.dlc_folder = options["dlc_folder"]
 
+    def update_console_title(self, file_name, downloaded_size, total_size, start_time):
+        percentage = (downloaded_size / total_size) * 100
+        elapsed_time = time.time() - start_time
+        download_speed = downloaded_size / elapsed_time if elapsed_time > 0 else 0
+        remaining_size = total_size - downloaded_size
+        eta_seconds = remaining_size / download_speed if download_speed > 0 else 0
+
+        eta_formatted = time.strftime("%H:%M:%S", time.gmtime(eta_seconds))
+
+        ctypes.windll.kernel32.SetConsoleTitleW(f"@hitting-them - Switch Rom Installer | {file_name} - {downloaded_size/1024/1024:.2f}MB / {total_size/1024/1024:.2f}MB - {percentage:.2f}% | ETA: {eta_formatted}")
+    
+    def download_file(self, url, file_name, game_title, headers):
+        with self.session.get(url, headers=headers, stream=True) as response:
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded_size = 0
+            start_time = time.time()
+
+            install_folder = os.path.join(self.games_folder, game_title)
+            if "update" in file_name.lower():
+                install_folder = os.path.join(self.updates_folder, game_title)
+            elif "dlc" in file_name.lower():
+                install_folder = os.path.join(self.dlc_folder, game_title)
+
+            os.makedirs(install_folder, exist_ok=True)
+
+            with open(os.path.join(install_folder, file_name), 'wb') as file:
+                for chunk in response.iter_content(chunk_size=self.CHUNK_SIZE):
+                    if chunk:
+                        file.write(chunk)
+                        downloaded_size += len(chunk)
+                        self.update_console_title(file_name, downloaded_size, total_size, start_time)
+
+class GOFile:
+    def __init__(self, options):
+        self.options = options
+
+        self.session = HTMLSession()
+        self.token = self.__get_token()
+        
+    def __get_token(self):
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept": "*/*",
+            "Connection": "keep-alive",
+        }
+
+        create_account_response = self.session.get("https://api.gofile.io/createAccount", headers=headers).json()
+        api_token = create_account_response["data"]["token"]
+        
+        account_response = self.session.get("https://api.gofile.io/getAccountDetails?token=" + api_token, headers=headers).json()
+
+        if account_response["status"] != 'ok':
+            print("[!] Could not setup GOFile!")
+            input()
+            exit()
+
+        return api_token
+    
+    def fetch_download(self, url):
+        try:
+            url_id = url.split("/")[-1]
+            url = f"https://api.gofile.io/getContent?contentId={url_id}&token={self.token}&websiteToken=7fd94ds12fds4&cache=true"
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Accept": "*/*",
+                "Connection": "keep-alive",
+            }
+
+            response = self.session.get(url, headers=headers).json()
+            if response["status"] != 'ok':
+                print("[!] GOFile might be down!")
+                input()
+                exit()
+            
+            data = response["data"]
+            if "contents" in data.keys():
+                contents = data["contents"]
+                for content in contents.values():
+                    if content["type"] == "file":
+                        return content["link"], content["name"]
+        except:
+            time.sleep(2)
+            self.fetch_download(url)
+    
+    def download_from_url(self, url, file_name, game_title):
+        headers = {
+            "Cookie": "accountToken=" + self.token,
+            "Accept-Encoding": "gzip, deflate, br",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Referer": url + ("/" if not url.endswith("/") else ""),
+            "Origin": url,
+            "Connection": "keep-alive",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site",
+            "Pragma": "no-cache",
+            "Cache-Control": "no-cache"
+        }
+        
+        file_downloader = FileDownloader(self.options)
+        file_downloader.download_file(url, file_name, game_title, headers)
+
+class Fichier:
+    def __init__(self, options):
+        self.options = options
+
+        self.session = HTMLSession()
+    
     def __get_connected_interface(self):
         try:
             result = subprocess.run(['netsh', 'interface', 'show', 'interface'], capture_output=True, text=True)
@@ -43,7 +157,7 @@ class FichierBypass:
         subprocess.run(['netsh', 'interface', 'set', 'interface', connection_interface, 'admin=disable'], check=True, capture_output=True)
         subprocess.run(['netsh', 'interface', 'set', 'interface', connection_interface, 'admin=enable'], check=True, capture_output=True)
         self.__wait_until_connection()
-
+    
     def fetch_download(self, link):
         try:
             response = self.session.get(link)
@@ -59,41 +173,39 @@ class FichierBypass:
 
                 if anchor_element:
                     return anchor_element['href'], file_name
-        except Exception as e:
-            print(f"[!] Error fetching download: {e}")
-            exit("[!] File is possibly removed from 1fichier")
-
+        except Exception:
+            print("[!] File is possibly removed from 1fichier")
+            input()
+            exit()
+    
     def download_from_url(self, url, file_name, game_title):
-        with self.session.get(url, stream=True) as response:
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded_size = 0
-            start_time = time.time()
+        file_downloader = FileDownloader(self.options)
+        file_downloader.download_file(url, file_name, game_title, {})
 
-            install_folder = os.path.join(self.games_folder, game_title)
-            if "update" in file_name.lower():
-                install_folder = os.path.join(self.updates_folder, game_title)
-            elif "dlc" in file_name.lower():
-                install_folder = os.path.join(self.dlc_folder, game_title)
+class Qiwi:
+    BASE_URL = "https://qiwi.lol/"
+    def __init__(self, options):
+        self.options = options
 
-            os.makedirs(install_folder, exist_ok=True)
+        self.session = HTMLSession()
+    
+    def fetch_download(self, url):
+        try:
+            response = self.session.get(url)
+            parser = BeautifulSoup(response.content, 'html.parser')
 
-            with open(os.path.join(install_folder, file_name), 'wb') as file:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        file.write(chunk)
-                        downloaded_size += len(chunk)
-                        self.update_console_title(file_name, downloaded_size, total_size, start_time)
+            file_name = parser.find("h1").text
+            download_link = f"{self.BASE_URL}{os.path.splitext(url.split('/')[-1])[0]}.{os.path.splitext(file_name)[1][1:]}"
 
-    def update_console_title(self, file_name, downloaded_size, total_size, start_time):
-        percentage = (downloaded_size / total_size) * 100
-        elapsed_time = time.time() - start_time
-        download_speed = downloaded_size / elapsed_time if elapsed_time > 0 else 0
-        remaining_size = total_size - downloaded_size
-        eta_seconds = remaining_size / download_speed if download_speed > 0 else 0
-
-        eta_formatted = time.strftime("%H:%M:%S", time.gmtime(eta_seconds))
-
-        ctypes.windll.kernel32.SetConsoleTitleW(f"@hitting-them - Switch Rom Installer | {file_name} - {downloaded_size/1024/1024:.2f}MB / {total_size/1024/1024:.2f}MB - {percentage:.2f}% | ETA: {eta_formatted}")
+            return download_link, file_name
+        except Exception:
+            print("[!] File is possibly removed from Qiwi")
+            input()
+            exit()
+    
+    def download_from_url(self, url, file_name, game_title):
+        file_downloader = FileDownloader(self.options)
+        file_downloader.download_file(url, file_name, game_title, {})
 
 class SwitchROM:
     BASE_URL = "https://nxbrew.com/"
@@ -153,6 +265,7 @@ class SwitchROM:
             parser = BeautifulSoup(response.content, "html.parser")
             
             game_title = parser.find("strong", string="Title: ").next_sibling.strip()
+            game_title = re.sub(r'[:*?<>|]', '', game_title)
 
             self.set_console_title(game_title)
 
@@ -235,14 +348,33 @@ class SwitchROM:
             
             download_links = []
             for selected_option in selected_rom_options:
-                fichier_element = selected_option.find("strong", string="1Fichier")
-                if fichier_element:
-                    fichier_downloads = fichier_element.find_parent().find_all("a")
-                    for download_link in fichier_downloads:
+                selected_hoster = None
+                hosters = []
+                option_name = selected_option.find("p", class_="has-medium-font-size").find("strong").get_text()
+
+                print(f"Select Hoster for {option_name}: ")
+                if selected_option.find("strong", string="1Fichier") or selected_option.find("a", string="1Fichier"):
+                    hosters.append("1Fichier")
+                if selected_option.find("strong", string="GoFile") or selected_option.find("a", string="GoFile"):
+                    hosters.append("GoFile")
+                if selected_option.find("strong", string="Qiwi") or selected_option.find("a", string="Qiwi"):
+                    hosters.append("Qiwi")
+                
+                for index, hoster in enumerate(hosters, start=1):
+                    print(f"[{index}] {hoster}")
+                
+                hoster_input = int(input())
+                if 1 <= hoster_input <= len(hosters):
+                    selected_hoster = hosters[hoster_input - 1]
+
+                download_element = selected_option.find("strong", string=selected_hoster)
+                if download_element:
+                    file_downloads = download_element.find_parent().find_all("a")
+                    for download_link in file_downloads:
                         download_links.append(download_link["href"])
                 else:
-                    single_fichier_element = selected_option.find("a", string="1Fichier")
-                    download_links.append(single_fichier_element["href"])
+                    single_download_element = selected_option.find("a", string=selected_hoster)
+                    download_links.append(single_download_element["href"])
         
             return game_title, game_id, download_links
         except Exception as e:
@@ -287,11 +419,11 @@ class SwitchROM:
             'upgrade-insecure-requests': '1',
         })
 
-        parsed = urlparse(temp_url)
-        id = temp_url.split('/')[-1]
-        request = client.get(temp_url, impersonate="chrome110")
-        next_url = f"{parsed.scheme}://{parsed.hostname}/go/{id}"
         try:
+            parsed = urlparse(temp_url)
+            id = temp_url.split('/')[-1]
+            request = client.get(temp_url, impersonate="chrome110")
+            next_url = f"{parsed.scheme}://{parsed.hostname}/go/{id}"
             for _ in range(2):
                 if request.headers.get('Location'): 
                     break
@@ -299,10 +431,10 @@ class SwitchROM:
                 inputs = bs4.form.findAll("input", {"name": re.compile(r"token$")})
                 data = { input.get('name'): input.get('value') for input in inputs }
                 data['x-token'] = self.recaptcha_v3_bypass()
-                    
+                        
                 request = client.post(next_url, data=data, headers={'content-type': 'application/x-www-form-urlencoded'}, allow_redirects=False, impersonate="chrome110")
                 next_url = f"{parsed.scheme}://{parsed.hostname}/xreallcygo/{id}"
-            
+                
             return request.headers.get('Location')
         except Exception:
             time.sleep(1)
@@ -316,7 +448,7 @@ class SwitchROM:
         for url in url_list:
             if "1link.club" in url:
                 bypassed_links.append(self.bypass_1link_club(url))
-            elif "ouo.io" in url:
+            elif "ouo.io" or "ouo.press" in url:
                 bypassed_links.append(self.bypass_ouo_io(url))
 
         return bypassed_links
@@ -349,47 +481,57 @@ class SwitchROM:
             files_in_rar = result.stdout.strip().split('\n')
             for file in files_in_rar:
                 version_match = re.search(r'\[v(\d+)\]', file)
-                if int(version_match.group(1)) != 0 and int(version_match.group(1)) % 65536 == 0: # 2^16
-                    extracted_files.append(os.path.join(extraction_path, file))
+                if version_match:
+                    if int(version_match.group(1)) != 0 and int(version_match.group(1)) % 65536 == 0: # 2^16
+                        extracted_files.append(os.path.join(extraction_path, file))
         except subprocess.CalledProcessError as e:
             print(f"[!] Error extracting {rar_file}: {e}")
         return extracted_files
 
     def extract_all_files(self, directory_list):
         update_files = []
+        multiple_parts = []
         for directory in directory_list:
             for root, dirs, files in os.walk(directory):
                 for file in files:
                     if file.endswith(".rar"):
                         rar_file = os.path.join(root, file)
                         if ".part" in rar_file and not ".part1" in rar_file:
-                            os.remove(rar_file)
+                            multiple_parts.append(file)
                             continue
                         updates = self.extract_rar(rar_file, os.path.dirname(rar_file))
                         if updates:
                             update_files.extend(updates)
                         os.remove(rar_file)
-
+        for files in multiple_parts:
+            os.remove(files)
         return update_files
 
-    
     def download_files(self, url_list, game_title, game_id):
         options = OptionsLoader.load_options()
-        fichier = FichierBypass(options)
+        fichier = Fichier(options)
+        gofile = GOFile(options)
+        qiwi = Qiwi(options)
 
         for url in url_list:
-            if "&" in url:
-                url = url.split('&')[0]
-            
-            self.set_console_title(f"Applying Download Bypass")
-            fichier.apply_bypass()
-            fetched_download = fichier.fetch_download(url)
-            fichier.download_from_url(fetched_download[0], fetched_download[1], game_title)
+            self.set_console_title(f"Processing URL: {url}")
+            if "1fichier" in url:
+                if "&" in url:
+                    url = url.split('&')[0]
+                fichier.apply_bypass()
+                fetched_download = fichier.fetch_download(url)
+                fichier.download_from_url(fetched_download[0], fetched_download[1], game_title)
+            elif "gofile" in url:
+                fetched_download = gofile.fetch_download(url)
+                gofile.download_from_url(fetched_download[0], fetched_download[1], game_title)
+            elif "qiwi" in url:
+                fetched_download = qiwi.fetch_download(url)
+                qiwi.download_from_url(fetched_download[0], fetched_download[1], game_title)
 
-            extracted_files = self.extract_all_files([options["games_folder"], options["updates_folder"], options["dlc_folder"]])
-            if options["ryujinx_apply_updates"] and extracted_files:
-                self.ryujinx_apply_updates(extracted_files, game_id)
-  
+        extracted_files = self.extract_all_files([options["games_folder"], options["updates_folder"], options["dlc_folder"]])
+        if options["ryujinx_apply_updates"] and extracted_files:
+            self.ryujinx_apply_updates(extracted_files, game_id)
+
 def main():
     rom_parser = SwitchROM()
     rom_parser.set_console_title(f"Idling")
